@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import bcrypt from 'bcrypt';
 
 process.env.SESSION_SECRET = 'test-only-session-secret-not-for-real-use';
+process.env.DATABASE_URL = 'postgresql://test:test@localhost/docchat_test';
 const { app, prisma } = await import('../index.js');
 
 // Exercise real HTTP, bcrypt and session middleware with an in-memory database
@@ -90,6 +91,18 @@ test('registration, hashed storage, duplicate rejection, login, session persiste
   assert.deepEqual(logout.data, { success: true });
   assert.match(logout.cookie, /Expires=Thu, 01 Jan 1970/);
   assert.deepEqual((await request('me', { cookie: loginCookie })).data, { user: null });
+});
+
+test('Neon HTTP duplicate errors preserve the existing conflict response', async () => {
+  const original = prisma.user.create;
+  prisma.user.create = async () => { throw Object.assign(new Error('private-database-details'), { code: '23505' }); };
+  try {
+    const result = await request('register', { body: { name: 'Ada', email: 'ada@example.com', password: 'password1' } });
+    assert.equal(result.status, 409);
+    assert.deepEqual(result.data, { error: 'An account with this email already exists.' });
+  } finally {
+    prisma.user.create = original;
+  }
 });
 
 test('database errors never expose internal details', async () => {

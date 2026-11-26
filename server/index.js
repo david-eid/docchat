@@ -2,6 +2,8 @@ import express from 'express';
 import session from 'express-session';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
+// Prisma 6 exports HTTP in capitals; alias it to the name used in Part 2 V2.
+import { PrismaNeonHTTP as PrismaNeonHttp } from '@prisma/adapter-neon';
 import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
 
@@ -15,7 +17,13 @@ if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
   throw new Error('Set SESSION_SECRET in server/.env to a private random value of at least 32 characters.');
 }
 
-export const prisma = new PrismaClient();
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL not loaded. Start from server with: node --watch --env-file=.env index.js');
+}
+
+// The adapter sends runtime queries over HTTPS (443), not PostgreSQL TCP (5432).
+const adapter = new PrismaNeonHttp(process.env.DATABASE_URL, {});
+export const prisma = new PrismaClient({ adapter });
 export const app = express();
 app.use(express.json()); // Read JSON request bodies.
 
@@ -67,7 +75,10 @@ app.post('/api/register', async (req, res) => {
     await logIn(req, user.id);
     res.status(201).json({ user });
   } catch (error) {
-    if (error.code === 'P2002') return res.status(409).json({ error: 'An account with this email already exists.' });
+    // Prisma 6's Neon HTTP adapter can return PostgreSQL's unique-violation code.
+    if (error.code === 'P2002' || error.code === '23505') {
+      return res.status(409).json({ error: 'An account with this email already exists.' });
+    }
     throw error;
   }
 });
